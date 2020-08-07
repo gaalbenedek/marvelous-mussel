@@ -65,8 +65,8 @@ mqtt_client_id = bytes('client_'+str(random_num), 'utf-8')
 #   Caveat: a secure connection uses about 9k bytes of the heap
 #         (about 1/4 of the micropython heap on the ESP8266 platform)
 ADAFRUIT_IO_URL = b'io.adafruit.com' 
-ADAFRUIT_USERNAME = b's184443'
-ADAFRUIT_IO_KEY = b'aio_OWWX21M28NJC5C2SOSTMKO0O2vQQ'
+ADAFRUIT_USERNAME = b'DB4_Group_1'
+ADAFRUIT_IO_KEY = b'aio_MXCy41tWkdg5GKlH38kLpadoJviE'
 ADAFRUIT_IO_TEMP_CHART = b'temp_measurements'
 
 ADAFRUIT_IO_MOTOR_FREQ = b'motor_freq'
