@@ -3,13 +3,11 @@ import network
 import time
 from umqtt.robust import MQTTClient
 import os
-import gc
 import sys
 import _thread
 import machine
 from machine import Pin
 from machine import ADC
-from machine import DAC
 from math import log
 import math
 import ssd1306
@@ -17,14 +15,18 @@ from machine import I2C, Pin
 
 
 # definition of the reference temperature
-reference_temp = 16
+Offline = True
+reference_temp = 18
 current_temp = 0
 p12 = machine.Pin(12)
 cooling_pump = machine.PWM(p12)
 OD_av = 0
+concentration = 8000
+Thread_website = False
 
 def website():
     
+    global Thread_website
     # WiFi connection information
     WIFI_SSID = 'iPhone'
     WIFI_PASSWORD = 'qwerty123'
@@ -32,10 +34,22 @@ def website():
     # the following function is the callback which is 
     # called when subscribed data is received
     def cb(topic, msg):
+        print("Topic: " + str(topic))
+        if topic == b'DB4_Group_1/feeds/target_temp':
+            rf(topic, msg)
+        else:
+            ac(topic, msg)
+    def rf(topic, msg):
         global reference_temp
         print('Received Data:  Topic = {}, Msg = {}'.format(topic, msg))
-        reference_temp = int(str(msg,'utf-8'))
+        reference_temp = float(str(msg,'utf-8'))
         print('Reference temperature = {} degrees Celsius'.format(reference_temp))
+        
+    def ac(topic, msg):
+        global concentration
+        print('Received Data:  Topic = {}, Msg = {}'.format(topic, msg))
+        concentration = float(str(msg,'utf-8'))
+        print('Concentration = {} cells'.format(concentration))
     
     # turn off the WiFi Access Point
     ap_if = network.WLAN(network.AP_IF)
@@ -68,17 +82,20 @@ def website():
     #   Caveat: a secure connection uses about 9k bytes of the heap
     #         (about 1/4 of the micropython heap on the ESP8266 platform)
     ADAFRUIT_IO_URL = b'io.adafruit.com' 
-    ADAFRUIT_USERNAME = b's184443'
-    ADAFRUIT_IO_KEY = b'aio_uAoM82f90zCshHm2XaFSQkrpASzv'
+    ADAFRUIT_USERNAME = b'DB4_Group_1'
+    ADAFRUIT_IO_KEY = b'aio_GSaI01qTs88BI3goMvHRjADB7mkP'
     
-    ADAFRUIT_IO_TEMP = b'Temp'
-    
+    ADAFRUIT_IO_TEMP = b'target_temp'
     ADAFRUIT_IO_TEMP_CHART = b'temp_measurements'
-    
     ADAFRUIT_IO_MOTOR_FREQ = b'motor_freq'
+    ADAFRUIT_IO_ALGAE_OD = b'algae_od'
+    ADAFRUIT_IO_ALGAE_FEED_RATE = b'algae_feed_rate'
+    
     mqtt_motor_freq = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_MOTOR_FREQ), 'utf-8')
     mqtt_temp_chart = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_TEMP_CHART), 'utf-8')
-    mqtt_ref_temp = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_TEMP), 'utf-8')      
+    mqtt_ref_temp = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_TEMP), 'utf-8')   
+    mqtt_algae_od = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_ALGAE_OD), 'utf-8')
+    mqtt_algae_feed_rate = bytes('{:s}/feeds/{:s}'.format(ADAFRUIT_USERNAME, ADAFRUIT_IO_ALGAE_FEED_RATE), 'utf-8')
     
     
     client = MQTTClient(client_id=mqtt_client_id, 
@@ -87,24 +104,36 @@ def website():
                         password=ADAFRUIT_IO_KEY,
                         ssl=False)
     
-    client.connect()
     try:            
         client.connect()
     except Exception as e:
         print('could not connect to MQTT server {}{}'.format(type(e).__name__, e))
         sys.exit()
     
-    client.set_callback(cb)                    
+    #client.set_callback(cb)
+    #client.set_callback(ac)                    
+    #client.subscribe(mqtt_ref_temp)
+    #client.subscribe(mqtt_algae_feed_rate)
+    client.set_callback(cb)
     client.subscribe(mqtt_ref_temp)
-    
     mqtt_ref_temp_get = bytes('{:s}/get'.format(mqtt_ref_temp), 'utf-8')    
-    client.publish(mqtt_ref_temp_get, '\0')  
+    client.publish(mqtt_ref_temp_get, '\0') 
+    
+    client.subscribe(mqtt_algae_feed_rate)
+    mqtt_algae_feed_rate_get = bytes('{:s}/get'.format(mqtt_algae_feed_rate), 'utf-8')    
+    client.publish(mqtt_algae_feed_rate_get, '\0')
+    
+    #mqtt_ref_temp_get = bytes('{:s}/get'.format(mqtt_ref_temp), 'utf-8')    
+    #client.publish(mqtt_ref_temp_get, '\0')  
 
+    #mqtt_algae_feed_rate_get = bytes('{:s}/get'.format(mqtt_algae_feed_rate), 'utf-8')    
+    #client.publish(mqtt_algae_feed_rate_get, '\0')
     # wait until data has been Published to the Adafruit IO feed
 
     while True:
+        Thread_website = True
         lock.acquire()
-        for i in range(100):
+        for i in range(10):
             try:
                 client.check_msg()
             except KeyboardInterrupt:
@@ -121,8 +150,12 @@ def website():
         client.publish(mqtt_temp_chart,    
                 bytes(str(current_temp), 'utf-8'), 
                 qos=0) 
+        
+        client.publish(mqtt_algae_od,    
+                bytes(str(OD_av), 'utf-8'), 
+                qos=0)
         lock.release()
-        time.sleep(2)
+        time.sleep(7)
 #############
 
 
@@ -235,12 +268,14 @@ def coolingsystem():
         
     prev_error = 0
     P = 20000
-    I = 100
+    I = 1000
     D = 100
     
     global current_temp
     start_time = time.time()
+    count = 0
     while(True):
+        count = count+1
         time.sleep_ms(1000)
         lock.acquire()
         temp_av = 0
@@ -256,10 +291,10 @@ def coolingsystem():
         print('Thermistor temperature: ' + str(current_temp))
     
         PID = int(pid_update(P,I,D,error,current_temp,reference_temp,prev_error))
-        
-        f = open('Temperature.txt','a')
-        f.write(str(time.time()-start_time) + ';' + str(current_temp) + '\n')
-        f.close()
+        if (count%10)==0:
+            f = open('Temperature.txt','a')
+            f.write(str(time.time()-start_time) + ';' + str(current_temp) + '\n')
+            f.close()
         
         print("PID output: " + str(PID))
 
@@ -275,6 +310,7 @@ def coolingsystem():
             
         print("Power Level for Peltier element: " + str(p33.value()))
         print("OD: " + str(OD_av))
+        print("concentration: " + str(concentration))
         updateOLED(current_temp,OD_av,cooling_pump.freq())
             
         des_motor_freq = PID
@@ -305,15 +341,38 @@ def feeding():
     ticksML = 13334
     amount_mussel = 3
     start_time = time.time()
+    
+    # initial fillup
+# =============================================================================
+#     lock.acquire()
+#     time.sleep(20)
+#     OD_sum = 0
+#     for j in range(300):
+#             OD = adc1.read()
+#             time.sleep_ms(10)
+#             OD_sum = OD_sum+OD
+#     OD_av = OD_sum/300
+#     c = 0
+#     feed = ((8000*3000) - (c*3000))/((2.92*(10**6))-(928*OD_av))
+#     dose = feed*ticksML*amount_mussel
+#     for i in range(dose):
+#         feeding_pump.value(1)
+#         time.sleep_us(50)
+#         feeding_pump.value(0)
+#     lock.release()
+# =============================================================================
+    
     while True:
         print("motor 2 sleeps!!")
-        c = 8000
+        c = concentration
+        now = time.time()
         for i in range(30):
             f = ((7.339*(10**6))*math.log((0.001057*c)))/(6*60*3000)
             a = c*math.exp(0.1696/(24*60*60)*10)
             c = a - f
             print("Conc: " + str(c))
             time.sleep(10)
+        print("time: " + str(time.time()-now))
         OD_sum = 0
         for j in range(300):
             OD = adc1.read()
@@ -339,10 +398,25 @@ def feeding():
             feeding_pump.value(0)
         lock.release()
         print(time.time()-now)
+        
+def watchdog():
+    global Thread_website
+    global Offline
+    while True:
+        time.sleep(50)
+        if Offline == False:
+            if Thread_website == True:
+                Thread_website = False
+            elif Thread_website == False:
+                print("RESTART")
+                cooling_pump.freq(0)
+                machine.reset()
+        
             
 _thread.start_new_thread(coolingsystem, ())
 _thread.start_new_thread(feeding, ())
 _thread.start_new_thread(website, ())
+_thread.start_new_thread(watchdog, ())
 
 # =============================================================================
 #import os
