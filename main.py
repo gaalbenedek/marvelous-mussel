@@ -15,14 +15,16 @@ from machine import I2C, Pin
 
 
 # definition of the reference temperature
-Offline = True
 reference_temp = 18
 current_temp = 0
 p12 = machine.Pin(12)
 cooling_pump = machine.PWM(p12)
-OD_av = 0
+intensity_av = 0
 concentration = 8000
 Thread_website = False
+Offline = True
+Thread_cooling = False
+Thread_feeding = False
 
 def website():
     
@@ -152,7 +154,7 @@ def website():
                 qos=0) 
         
         client.publish(mqtt_algae_od,    
-                bytes(str(OD_av), 'utf-8'), 
+                bytes(str(intensity_av), 'utf-8'), 
                 qos=0)
         lock.release()
         time.sleep(7)
@@ -180,14 +182,14 @@ ADC_Vmax = 3.15
 def init_temp_sensor(TENP_SENS_ADC_PIN_NO = 32):
     adc = ADC(Pin(TENP_SENS_ADC_PIN_NO))
     adc.atten(ADC.ATTN_11DB)
-    adc.width(ADC.WIDTH_10BIT)
+    adc.width(ADC.WIDTH_12BIT)
     return adc
 
 def read_temp(temp_sens):
     raw_read = []
     # Collect NUM_SAMPLES
     for i in range(1, NUM_SAMPLES+1):
-        raw_read.append(temp_sens.read())
+        raw_read.append(int((temp_sens.read())/4))
 
     # Average of the NUM_SAMPLES and look it up in the table
     raw_average = sum(raw_read)/NUM_SAMPLES
@@ -259,7 +261,7 @@ def coolingsystem():
     def updateOLED(waterTempText, ODText, RPMText): 		#input should be numbers, int or float, for all 3 variables
         oled.fill(0)						#clears display
         oled.text(("Temp: "+str(waterTempText)+" C"), 0, 0)	#shows water temperature
-        oled.text(("OD: "+str(ODText)), 0, 10)			#shows OD
+        oled.text(("Intensity: "+str(ODText)), 0, 10)			#shows OD
         oled.text(("RPM: "+str(RPMText)), 0, 20)		#shows RPM
         oled.show()						#refreshes display
     
@@ -272,9 +274,11 @@ def coolingsystem():
     D = 100
     
     global current_temp
+    global Thread_cooling
     start_time = time.time()
     count = 0
     while(True):
+        Thread_cooling = True
         count = count+1
         time.sleep_ms(1000)
         lock.acquire()
@@ -309,9 +313,9 @@ def coolingsystem():
             p33.value(0)
             
         print("Power Level for Peltier element: " + str(p33.value()))
-        print("OD: " + str(OD_av))
+        print("Intensity: " + str(intensity_av))
         print("concentration: " + str(concentration))
-        updateOLED(current_temp,OD_av,cooling_pump.freq())
+        updateOLED(current_temp,intensity_av,cooling_pump.freq())
             
         des_motor_freq = PID
         motor_steps = abs(des_motor_freq - cooling_pump.freq())/1000
@@ -336,74 +340,112 @@ def feeding():
     LED = machine.Pin(15, machine.Pin.OUT)
     LED.value(1)
     feeding_pump = machine.Pin(27, machine.Pin.OUT)
-    global OD_av
+    global intensity_av
+    global Thread_feeding
     #dose = 100000
     ticksML = 13334
-    amount_mussel = 3
+    amount_mussel = 2
     start_time = time.time()
     
     # initial fillup
-# =============================================================================
-#     lock.acquire()
-#     time.sleep(20)
-#     OD_sum = 0
-#     for j in range(300):
-#             OD = adc1.read()
-#             time.sleep_ms(10)
-#             OD_sum = OD_sum+OD
-#     OD_av = OD_sum/300
-#     c = 0
-#     feed = ((8000*3000) - (c*3000))/((2.92*(10**6))-(928*OD_av))
-#     dose = feed*ticksML*amount_mussel
-#     for i in range(dose):
-#         feeding_pump.value(1)
-#         time.sleep_us(50)
-#         feeding_pump.value(0)
-#     lock.release()
-# =============================================================================
+    lock.acquire()
+    time.sleep(20)
+    intensity_sum = 0
+    for j in range(300):
+            intensity = adc1.read()
+            time.sleep_ms(10)
+            intensity_sum = intensity_sum+intensity
+    intensity_av = intensity_sum/300
+    c = 0
+    if intensity_av > 3220:
+            intensity_av = 3220
+    elif intensity_av < 1220:
+        intensity_av = 1220
+    intensity_av = intensity_av - 220
+    feed = (((8000*3000) - (c*3000))/(-2.409638554*(10**6)*math.log(0.0002513720730*intensity_av)/math.log(10)-8024.096385))
+    dose = (feed-11)*ticksML
+    f = open('Feed.txt','a')
+    f.write(str(time.time()-start_time) + ';' + str(feed) + ';' + str(c) + ';' + str(intensity_av) +'\n')
+    f.close()
+    for i in range(dose):
+        feeding_pump.value(1)
+        time.sleep_us(50)
+        feeding_pump.value(0)
+    lock.release()
+
     
     while True:
+        Thread_feeding = True
         print("motor 2 sleeps!!")
         c = concentration
-        now = time.time()
-        for i in range(30):
-            f = ((7.339*(10**6))*math.log((0.001057*c)))/(6*60*3000)
+        for i in range(60):
+            f = ((amount_mussel*7.339*(10**6))*math.log((0.001057*c)))/(6*60*3000)
             a = c*math.exp(0.1696/(24*60*60)*10)
             c = a - f
             print("Conc: " + str(c))
             time.sleep(10)
-        print("time: " + str(time.time()-now))
-        OD_sum = 0
+        intensity_sum = 0
+        # OD calibration
+# =============================================================================
+#         lock.acquire()
+#         time.sleep(20)
+#         for i in range(250000):
+#             feeding_pump.value(1)
+#             time.sleep_us(50)
+#             feeding_pump.value(0)
+#         f = open('ODdataset.txt','w')
+#         for i in range(30):
+#             data_av = 0 
+#             for j in range(300):
+#                 data = adc1.read()
+#                 time.sleep_ms(10)
+#                 data_av = data_av+data
+#             data_av = data_av/300
+#             print("OD-value: " + str(data_av))
+#             f.write('%d\n' % (data_av))
+#         f.close()
+#         lock.release()
+#         print("ENDDDDDDD")
+#         time.sleep(100)
+# =============================================================================
+        # end of OD calibration
         for j in range(300):
-            OD = adc1.read()
+            intensity = adc1.read()
             time.sleep_ms(10)
-            OD_sum = OD_sum+OD
-        OD_av = OD_sum/300
-        feed = ((8000*3000) - (c*3000))/((2.92*(10**6))-(928*OD_av))
+            intensity_sum = intensity_sum+intensity
+        intensity_av = intensity_sum/300
+        if intensity_av > 3220:
+            intensity_av = 3220
+        elif intensity_av < 1220:
+            intensity_av = 1220
+        intensity_av = intensity_av - 220
+        feed = (((8000*3000) - (c*3000))/(-2.409638554*(10**6)*math.log(0.0002513720730*intensity_av)/math.log(10)-8024.096385)/10)
         print("Feed Volume: " + str(feed))
         
         f = open('Feed.txt','a')
-        f.write(str(time.time()-start_time) + ';' + str(feed) + ';' + str(c) + ';' + str(OD_av) +'\n')
+        f.write(str(time.time()-start_time) + ';' + str(feed) + ';' + str(c) + ';' + str(intensity_av) +'\n')
         f.close()
         
+        # 9.732418 mL per mussel resulted in 33mL
         # total volume times amount of ticks it needs per mL
-        dose = feed*ticksML*amount_mussel
+        dose = feed*ticksML
         lock.acquire()
         print("motor 2 starts")
-        time.sleep(3)
-        now = time.time()
+        time.sleep(5)
         for i in range(dose):
             feeding_pump.value(1)
             time.sleep_us(50)
             feeding_pump.value(0)
         lock.release()
-        print(time.time()-now)
         
 def watchdog():
     global Thread_website
+    global Thread_cooling
+    global Thread_feeding
     global Offline
     while True:
-        time.sleep(50)
+        time.sleep(360)
+        print("hello")
         if Offline == False:
             if Thread_website == True:
                 Thread_website = False
@@ -411,12 +453,23 @@ def watchdog():
                 print("RESTART")
                 cooling_pump.freq(0)
                 machine.reset()
-        
+        if Thread_cooling == True:
+            Thread_cooling = False
+        elif Thread_cooling == False:
+            print("Restart C")
+            cooling_pump.freq(0)
+            machine.reset()
+        if Thread_feeding == True:
+            Thread_feeding = False
+        elif Thread_feeding == False:
+            print("Restart F")
+            cooling_pump.freq(0)
+            machine.reset()
             
 _thread.start_new_thread(coolingsystem, ())
 _thread.start_new_thread(feeding, ())
 _thread.start_new_thread(website, ())
-_thread.start_new_thread(watchdog, ())
+#_thread.start_new_thread(watchdog, ())
 
 # =============================================================================
 #import os
