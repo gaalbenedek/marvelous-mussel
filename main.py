@@ -14,7 +14,7 @@ import ssd1306
 from machine import I2C, Pin
 
 
-# definition of the reference temperature
+# initialisation of certain parameters
 reference_temp = 18
 current_temp = 0
 p12 = machine.Pin(12)
@@ -85,7 +85,7 @@ def website():
     #         (about 1/4 of the micropython heap on the ESP8266 platform)
     ADAFRUIT_IO_URL = b'io.adafruit.com' 
     ADAFRUIT_USERNAME = b'DB4_Group_1'
-    ADAFRUIT_IO_KEY = b'aio_GSaI01qTs88BI3goMvHRjADB7mkP'
+    ADAFRUIT_IO_KEY = b'aio_mIHs90rn1ZSaLS9t9amzm6Ug4Ahn'
     
     ADAFRUIT_IO_TEMP = b'target_temp'
     ADAFRUIT_IO_TEMP_CHART = b'temp_measurements'
@@ -111,11 +111,7 @@ def website():
     except Exception as e:
         print('could not connect to MQTT server {}{}'.format(type(e).__name__, e))
         sys.exit()
-    
-    #client.set_callback(cb)
-    #client.set_callback(ac)                    
-    #client.subscribe(mqtt_ref_temp)
-    #client.subscribe(mqtt_algae_feed_rate)
+
     client.set_callback(cb)
     client.subscribe(mqtt_ref_temp)
     mqtt_ref_temp_get = bytes('{:s}/get'.format(mqtt_ref_temp), 'utf-8')    
@@ -124,13 +120,6 @@ def website():
     client.subscribe(mqtt_algae_feed_rate)
     mqtt_algae_feed_rate_get = bytes('{:s}/get'.format(mqtt_algae_feed_rate), 'utf-8')    
     client.publish(mqtt_algae_feed_rate_get, '\0')
-    
-    #mqtt_ref_temp_get = bytes('{:s}/get'.format(mqtt_ref_temp), 'utf-8')    
-    #client.publish(mqtt_ref_temp_get, '\0')  
-
-    #mqtt_algae_feed_rate_get = bytes('{:s}/get'.format(mqtt_algae_feed_rate), 'utf-8')    
-    #client.publish(mqtt_algae_feed_rate_get, '\0')
-    # wait until data has been Published to the Adafruit IO feed
 
     while True:
         Thread_website = True
@@ -209,9 +198,6 @@ def read_temp(temp_sens):
 
 temp_sens = init_temp_sensor()
     
-# Motor setup
-# optional way to code
-# watch dog timer!
 I_sum = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 def pid_update(P,I,D,error,current_temp,reference_temp,prev_error):
     
@@ -231,22 +217,6 @@ def pid_update(P,I,D,error,current_temp,reference_temp,prev_error):
     print("reference temp: " + str(reference_temp))
     
     return Ut
-
-# =============================================================================
-# def subscription():
-#     mqtt_ref_temp_get = bytes('{:s}/get'.format(mqtt_ref_temp), 'utf-8')    
-#     client.publish(mqtt_ref_temp_get, '\0')  
-# 
-#     # wait until data has been Published to the Adafruit IO feed
-#     while True:
-#         try:
-#             client.wait_msg()
-#         except KeyboardInterrupt:
-#             print('Ctrl-C pressed...exiting')
-#             client.disconnect()
-#             sys.exit()
-#         time.sleep(1)
-# =============================================================================
     
 def coolingsystem():
     global cooling_pump
@@ -262,7 +232,7 @@ def coolingsystem():
         oled.fill(0)						#clears display
         oled.text(("Temp: "+str(waterTempText)+" C"), 0, 0)	#shows water temperature
         oled.text(("Intensity: "+str(ODText)), 0, 10)			#shows OD
-        oled.text(("RPM: "+str(RPMText)), 0, 20)		#shows RPM
+        oled.text(("M.freq.: "+str(RPMText)), 0, 20)		#shows RPM
         oled.show()						#refreshes display
     
     p33 = machine.Pin(33,Pin.OUT)
@@ -385,30 +355,7 @@ def feeding():
             print("Conc: " + str(c))
             time.sleep(10)
         intensity_sum = 0
-        # OD calibration
-# =============================================================================
-#         lock.acquire()
-#         time.sleep(20)
-#         for i in range(250000):
-#             feeding_pump.value(1)
-#             time.sleep_us(50)
-#             feeding_pump.value(0)
-#         f = open('ODdataset.txt','w')
-#         for i in range(30):
-#             data_av = 0 
-#             for j in range(300):
-#                 data = adc1.read()
-#                 time.sleep_ms(10)
-#                 data_av = data_av+data
-#             data_av = data_av/300
-#             print("OD-value: " + str(data_av))
-#             f.write('%d\n' % (data_av))
-#         f.close()
-#         lock.release()
-#         print("ENDDDDDDD")
-#         time.sleep(100)
-# =============================================================================
-        # end of OD calibration
+
         for j in range(300):
             intensity = adc1.read()
             time.sleep_ms(10)
@@ -445,24 +392,29 @@ def watchdog():
     global Offline
     while True:
         time.sleep(360)
-        print("hello")
+        # checks intital network setting
         if Offline == False:
+            # checks network thread
             if Thread_website == True:
                 Thread_website = False
+                
             elif Thread_website == False:
-                print("RESTART")
                 cooling_pump.freq(0)
                 machine.reset()
+                
+        # checks cooling thread
         if Thread_cooling == True:
             Thread_cooling = False
+            
         elif Thread_cooling == False:
-            print("Restart C")
             cooling_pump.freq(0)
             machine.reset()
+            
+        # checks feeding thread
         if Thread_feeding == True:
             Thread_feeding = False
+            
         elif Thread_feeding == False:
-            print("Restart F")
             cooling_pump.freq(0)
             machine.reset()
             
